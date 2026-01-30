@@ -47,7 +47,7 @@ public class WaterHeightmap : MonoBehaviour
     }
 
     // For mouse drag simulation
-    private bool isDragging = false; // Are we moving the mouse
+    private bool isDragging = false; // Are we moving the mouse?
     private Vector2? lastDragUV = null; // Position of previous drag event so we can track mouse movement
 
     void Update()
@@ -58,60 +58,64 @@ public class WaterHeightmap : MonoBehaviour
 
         if (mesh == null || heights == null) return;
 
-        // While we hold left click, we're dragging
-        if (Input.GetMouseButtonDown(0))
+        // Handle mouse drag state based on raycast hit
+        bool mouseHeld = Input.GetMouseButton(0);
+        Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+        bool hitWater = Physics.Raycast(ray, out RaycastHit hit);
+
+        if (mouseHeld && hitWater)
         {
-            isDragging = true;
-            lastDragUV = null;
+            if (!isDragging)
+            {
+                // Start a new drag if entering water while mouse is held
+                isDragging = true;
+                lastDragUV = null;
+            }
         }
-        if (Input.GetMouseButtonUp(0))
+        else
         {
+            // If mouse is not held or not over water, stop dragging
             isDragging = false;
             lastDragUV = null;
         }
 
-        if (isDragging)
+        if (isDragging && hitWater)
         {
-            // Send out raycast from mouse pointer every frame
-            Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
-            if (Physics.Raycast(ray, out RaycastHit hit))
+            // If it hits the mesh collider, store the hit location
+            Vector3 local = transform.InverseTransformPoint(hit.point);
+            float fx = Mathf.Clamp(local.x, 0, width - 1);
+            float fy = Mathf.Clamp(local.z, 0, height - 1);
+            float u = fx / (width - 1);
+            float v = fy / (height - 1);
+            Vector2 curr = new Vector2(u, v);
+            // If there was a previous drag value (i.e., the mouse has moved)
+            if (lastDragUV.HasValue)
             {
-                // If it hits the mesh collider, store the hit location
-                Vector3 local = transform.InverseTransformPoint(hit.point);
-                float fx = Mathf.Clamp(local.x, 0, width - 1);
-                float fy = Mathf.Clamp(local.z, 0, height - 1);
-                float u = fx / (width - 1);
-                float v = fy / (height - 1);
-                Vector2 curr = new Vector2(u, v);
-                // If there was a previous drag value (i.e., the mouse has moved)
-                if (lastDragUV.HasValue)
+                // Ensure distance isn't negligable
+                Vector2 prev = lastDragUV.Value;
+                float dist = Vector2.Distance(prev, curr);
+                if (dist > 0.0001f)
                 {
-                    // Ensure distance isn't negligable
-                    Vector2 prev = lastDragUV.Value;
-                    float dist = Vector2.Distance(prev, curr);
-                    if (dist > 0.0001f)
+                    // Scale number of points between previous and current mouse positions such that number of ripple points per unit of distance is consistent
+                    // Also accounts for more dense meshes
+                    // Prevents inconsistency between slower and faster mouse movements
+                    int steps = Mathf.CeilToInt(dist * Mathf.Max(width, height) * 2f);
+                    for (int i = 1; i <= steps; i++)
                     {
-                        // Scale number of points between previous and current mouse positions such that number of ripple points per unit of distance is consistent
-                        // Also accounts for more dense meshes
-                        // Prevents inconsistency between slower and faster mouse movements
-                        int steps = Mathf.CeilToInt(dist * Mathf.Max(width, height) * 2f);
-                        for (int i = 1; i <= steps; i++)
-                        {
-                            // For each ripple point, apply a ripple
-                            float t = i / (float)steps;
-                            Vector2 lerp = Vector2.Lerp(prev, curr, t);
-                            // Reduced multiplier from 2f to 0.5f
-                            AddRippleNormalized(lerp.x, lerp.y, dist * 0.5f);
-                        }
+                        // For each ripple point, apply a ripple
+                        float t = i / (float)steps;
+                        Vector2 lerp = Vector2.Lerp(prev, curr, t);
+                        // Reduced multiplier from 2f to 0.5f
+                        AddRippleNormalized(lerp.x, lerp.y, dist * 0.5f);
                     }
                 }
-                else
-                {
-                    // If we aren't moving the mouse, just add a single ripple
-                    AddRippleNormalized(u, v);
-                }
-                lastDragUV = curr;
             }
+            else
+            {
+                // If we aren't moving the mouse, just add a single ripple
+                AddRippleNormalized(u, v);
+            }
+            lastDragUV = curr;
         }
 
         // --- Water Simulation ---
@@ -217,6 +221,13 @@ public class WaterHeightmap : MonoBehaviour
         // Generate the mesh and assign it
         mesh = GenerateMesh();
         meshFilter.mesh = mesh;
+        // Update the MeshCollider to match the new mesh
+        MeshCollider meshCollider = GetComponent<MeshCollider>();
+        if (meshCollider != null)
+        {
+            meshCollider.sharedMesh = null; // Clear first to force update
+            meshCollider.sharedMesh = mesh;
+        }
     }
 
     // Generates a flat mesh based on the heights array
